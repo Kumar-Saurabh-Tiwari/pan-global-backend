@@ -2,6 +2,7 @@ const User = require('../../auth/models/user.model');
 const Chapter = require('../../app/models/chapter.model');
 const ChapterAccess = require('../../app/models/globalAccess.model');
 const Event = require('../../app/models/event.model');
+const mongoose = require('mongoose');
 
 // Get global benefits based on membership type
 exports.getGlobalBenefits = async (req, res) => {
@@ -60,27 +61,30 @@ exports.getGlobalUsage = async (req, res) => {
         const currentYear = new Date().getFullYear();
         const startOfYear = new Date(currentYear, 0, 1);
         
+        // Convert user ID to ObjectId - FIX: Add 'new' keyword
+        const userId = new mongoose.Types.ObjectId(req.user.id);
+        
         // Get visits this year
         const visits = await ChapterAccess.countDocuments({
-            user: req.user.id,
+            user: userId,
             visitDate: { $gte: startOfYear }
         });
         
         // Get unique chapters visited
         const chaptersVisited = await ChapterAccess.distinct('chapter', {
-            user: req.user.id,
+            user: userId,
             visitDate: { $gte: startOfYear }
         });
         
         // Get events attended
         const eventsAttended = await Event.countDocuments({
-            attendees: req.user.id,
+            attendees: userId,
             date: { $gte: startOfYear }
         });
         
         // Get most visited chapter
         const chapterVisits = await ChapterAccess.aggregate([
-            { $match: { user: req.user.id, visitDate: { $gte: startOfYear } } },
+            { $match: { user: userId, visitDate: { $gte: startOfYear } } },
             { $group: { _id: "$chapter", count: { $sum: 1 } } },
             { $sort: { count: -1 } },
             { $limit: 1 }
@@ -88,6 +92,7 @@ exports.getGlobalUsage = async (req, res) => {
         
         let mostVisitedChapter = null;
         if (chapterVisits.length > 0) {
+            // Ensure we're working with a proper ObjectId here too
             const chapter = await Chapter.findById(chapterVisits[0]._id);
             if (chapter) {
                 mostVisitedChapter = {
