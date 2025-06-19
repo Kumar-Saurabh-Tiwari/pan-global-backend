@@ -72,7 +72,7 @@ exports.updateProfilePhoto = async (req, res) => {
         fs.writeFileSync(filepath, req.file.buffer);
         
         // Update user profile with new photo URL
-        const photoUrl = `/uploads/profile-photos/${filename}`;
+        const photoUrl = `${filename}`;
         const updatedUser = await User.findByIdAndUpdate(
             req.user.id,
             { profilePhoto: photoUrl },

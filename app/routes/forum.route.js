@@ -43,5 +43,7 @@ router.post('/forum/replies/:replyId/like',  forumController.likeReply);
 
 // Trending tags
 router.get('/forum/trending-tags', forumController.getTrendingTags);
+router.get('/forum/stats', forumController.getForumStats);
+router.get('/forum/categories/stats', forumController.getCategoriesWithStats);
 
 module.exports = router;

@@ -61,28 +61,60 @@ exports.getGlobalUsage = async (req, res) => {
         const currentYear = new Date().getFullYear();
         const startOfYear = new Date(currentYear, 0, 1);
         
-        // Convert user ID to ObjectId - FIX: Add 'new' keyword
+        // Convert user ID to ObjectId
         const userId = new mongoose.Types.ObjectId(req.user.id);
         
+        // Get user details to determine membership limits
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+        
+        // Define limits based on membership type
+        const membershipLimits = {
+            basic: {
+                maxVisitsPerYear: 12,
+                maxChaptersAccess: 1,
+                maxEventsPerYear: 6
+            },
+            premium: {
+                maxVisitsPerYear: 25,
+                maxChaptersAccess: 8,
+                maxEventsPerYear: 10
+            },
+            executive: {
+                maxVisitsPerYear: 50,
+                maxChaptersAccess: 12,
+                maxEventsPerYear: 20
+            }
+        };
+        
+        const limits = membershipLimits[user.memberType] || membershipLimits.basic;
+        
         // Get visits this year
-        const visits = await ChapterAccess.countDocuments({
+        const visitsThisYear = await ChapterAccess.countDocuments({
             user: userId,
             visitDate: { $gte: startOfYear }
         });
         
-        // Get unique chapters visited
-        const chaptersVisited = await ChapterAccess.distinct('chapter', {
+        // Get unique chapters visited this year
+        const chaptersVisitedThisYear = await ChapterAccess.distinct('chapter', {
             user: userId,
             visitDate: { $gte: startOfYear }
         });
         
-        // Get events attended
-        const eventsAttended = await Event.countDocuments({
+        // Get total available chapters
+        const totalChapters = await Chapter.countDocuments({ 
+            status: { $in: ['Active', 'active'] } 
+        });
+        
+        // Get events attended this year
+        const eventsAttendedThisYear = await Event.countDocuments({
             attendees: userId,
             date: { $gte: startOfYear }
         });
         
-        // Get most visited chapter
+        // Get most visited chapter this year
         const chapterVisits = await ChapterAccess.aggregate([
             { $match: { user: userId, visitDate: { $gte: startOfYear } } },
             { $group: { _id: "$chapter", count: { $sum: 1 } } },
@@ -92,24 +124,70 @@ exports.getGlobalUsage = async (req, res) => {
         
         let mostVisitedChapter = null;
         if (chapterVisits.length > 0) {
-            // Ensure we're working with a proper ObjectId here too
             const chapter = await Chapter.findById(chapterVisits[0]._id);
             if (chapter) {
                 mostVisitedChapter = {
                     name: chapter.name,
                     location: `${chapter.city}, ${chapter.country}`,
-                    visits: chapterVisits[0].count
+                    visits: chapterVisits[0].count,
+                    displayText: `${chapter.name} (${chapterVisits[0].count} visits)`
                 };
             }
         }
         
+        // Calculate percentage values for progress bars (0-100)
+        const visitsPercentage = Math.min((visitsThisYear / limits.maxVisitsPerYear) * 100, 100);
+        const chaptersPercentage = Math.min((chaptersVisitedThisYear.length / limits.maxChaptersAccess) * 100, 100);
+        const eventsPercentage = Math.min((eventsAttendedThisYear / limits.maxEventsPerYear) * 100, 100);
+        
+        // Get user's total lifetime stats for additional context
+        const lifetimeStats = {
+            totalVisits: await ChapterAccess.countDocuments({ user: userId }),
+            totalChaptersVisited: (await ChapterAccess.distinct('chapter', { user: userId })).length,
+            totalEventsAttended: await Event.countDocuments({ attendees: userId })
+        };
+        
         res.json({
-            visitsThisYear: visits,
-            chaptersVisited: chaptersVisited.length,
-            eventsAttended,
-            mostVisitedChapter
+            // Current year stats with limits
+            visitsThisYear: {
+                current: visitsThisYear,
+                max: limits.maxVisitsPerYear,
+                percentage: Math.round(visitsPercentage),
+                displayText: `${visitsThisYear}/${limits.maxVisitsPerYear}`,
+                remaining: Math.max(limits.maxVisitsPerYear - visitsThisYear, 0)
+            },
+            chaptersVisited: {
+                current: chaptersVisitedThisYear.length,
+                max: Math.min(limits.maxChaptersAccess, totalChapters), // Don't exceed available chapters
+                percentage: Math.round(chaptersPercentage),
+                displayText: `${chaptersVisitedThisYear.length}/${Math.min(limits.maxChaptersAccess, totalChapters)}`,
+                totalAvailable: totalChapters,
+                remaining: Math.max(limits.maxChaptersAccess - chaptersVisitedThisYear.length, 0)
+            },
+            eventsAttended: {
+                current: eventsAttendedThisYear,
+                max: limits.maxEventsPerYear,
+                percentage: Math.round(eventsPercentage),
+                displayText: `${eventsAttendedThisYear}/${limits.maxEventsPerYear}`,
+                remaining: Math.max(limits.maxEventsPerYear - eventsAttendedThisYear, 0)
+            },
+            mostVisitedChapter,
+            
+            // Additional context
+            membershipType: user.memberType,
+            membershipLimits: limits,
+            lifetimeStats,
+            
+            // Summary
+            summary: {
+                utilizationRate: Math.round(((visitsThisYear + chaptersVisitedThisYear.length + eventsAttendedThisYear) / 
+                    (limits.maxVisitsPerYear + limits.maxChaptersAccess + limits.maxEventsPerYear)) * 100),
+                isNearLimits: visitsPercentage > 80 || chaptersPercentage > 80 || eventsPercentage > 80,
+                topUsage: Math.max(visitsPercentage, chaptersPercentage, eventsPercentage)
+            }
         });
     } catch (err) {
+        console.error('Error in getGlobalUsage:', err);
         res.status(500).json({ error: err.message });
     }
 };
@@ -161,7 +239,10 @@ exports.getAllChapters = async (req, res) => {
             };
         }));
         
-        res.json(result);
+        // Return result wrapped in a "chapters" property
+        res.json({
+            chapters: result
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

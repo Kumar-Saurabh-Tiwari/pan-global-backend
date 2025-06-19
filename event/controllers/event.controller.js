@@ -1,5 +1,6 @@
 const Event = require('../../app/models/event.model');
 const User = require('../../auth/models/user.model');
+const mongoose = require('mongoose'); // Import mongoose
 
 
 // Add this function to your existing event.controller.js file
@@ -249,18 +250,19 @@ exports.getUpcomingEvents = async (req, res) => {
 exports.getRegisteredEvents = async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
-        
+        const userId = new mongoose.Types.ObjectId(req.user.id);
+
         const events = await Event.find({
-            attendees: req.user.id
+            attendees: userId
         })
             .sort({ date: 1 })
             .skip((page - 1) * limit)
             .limit(parseInt(limit));
-        
+
         const totalEvents = await Event.countDocuments({
-            attendees: req.user.id
+            attendees: userId
         });
-        
+
         res.json({
             events: events.map(event => ({
                 id: event._id,

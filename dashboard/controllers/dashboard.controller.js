@@ -3,6 +3,7 @@ const ConnectionPoint = require('../../app/models/connectionPoint.model');
 const Chapter = require('../../app/models/chapter.model'); // Fixed import
 const Event = require('../../app/models/event.model');
 const Resource = require('../../app/models/resource.model');
+const mongoose = require('mongoose'); // Import mongoose
 
 exports.getDashboardData = async (req, res) => {
     try {
@@ -26,7 +27,7 @@ exports.getConnectionPoints = async (req, res) => {
         const lastMonthPoints = points && points.history && points.history.length >= 2 
             ? points.history[points.history.length - 2].total 
             : 0;
-        const currentPoints = points ? points.total : 320; // Default to 320 if no data
+        const currentPoints = points ? points.total : 0; // Default to 320 if no data
         const growth = lastMonthPoints > 0 
             ? ((currentPoints - lastMonthPoints) / lastMonthPoints * 100).toFixed(0) 
             : 15; // Default to 15% if no historical data
@@ -110,27 +111,30 @@ exports.getMembershipData = async (req, res) => {
         if (!user) {
             return res.status(404).json({ error: "User not found" });
         }
-        
+
+        // Convert user ID to ObjectId
+        const userId = new mongoose.Types.ObjectId(req.user.id);
+
         // Calculate days until renewal
         const currentDate = new Date();
         const expiryDate = user.membershipExpiry || new Date(currentDate.getFullYear() + 1, currentDate.getMonth(), currentDate.getDate());
         const daysUntilRenewal = Math.ceil((expiryDate - currentDate) / (1000 * 60 * 60 * 24));
-        
+
         // Calculate membership period in months
         const startDate = user.createdAt;
         const monthsActive = Math.floor((currentDate - startDate) / (1000 * 60 * 60 * 24 * 30));
-        
+
         // Get resources accessed count
         const resourcesAccessed = await Resource.countDocuments({
-            accessedBy: req.user.id
+            accessedBy: userId
         });
-        
+
         // Get events attended count
         const eventsAttended = await Event.countDocuments({
-            attendees: req.user.id,
+            attendees: userId,
             date: { $lt: new Date() }
         });
-        
+
         res.json({
             daysUntilRenewal: daysUntilRenewal || 285,
             description: "Until renewal",
@@ -205,7 +209,7 @@ exports.getAllDashboardData = async (req, res) => {
         const events = await Event.find({
             date: { 
                 $gte: new Date(), 
-                $lte: thirtyDaysFromNow 
+                // $lte: thirtyDaysFromNow 
             }
         }).sort({ date: 1 }).limit(3);
         
@@ -224,7 +228,7 @@ exports.getAllDashboardData = async (req, res) => {
         // Get connection points
         const points = await ConnectionPoint.findOne({ userId: req.user.id });
         const connectionPoints = {
-            total: (points && points.total) || 320,
+            total: (points && points.total) || 0,
             description: "Loyalty program points",
             growth: "+15%"
         };

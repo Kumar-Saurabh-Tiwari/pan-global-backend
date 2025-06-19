@@ -1,11 +1,12 @@
 const Connection = require('../../app/models/connection.model');
 const Chapter = require('../../app/models/chapter.model');
 const User = require('../../auth/models/user.model');
+const { UserMembership } = require('../../app/models/memberBenefits');
 
-// Get network overview stats
+// Get network overview stats (Enhanced for relationship management)
 exports.getNetworkStats = async (req, res) => {
     try {
-        // Total connections
+        // Total members (accepted connections)
         const totalConnections = await Connection.countDocuments({
             $or: [
                 { requester: req.user.id, status: 'accepted' },
@@ -13,32 +14,485 @@ exports.getNetworkStats = async (req, res) => {
             ]
         });
 
-        // Pending requests
-        const pendingRequests = await Connection.countDocuments({
-            recipient: req.user.id,
-            status: 'pending'
+        // Follow-ups due (connections with nextFollowUp <= today)
+        const today = new Date();
+        today.setHours(23, 59, 59, 999); // End of today
+        
+        const followUpsDue = await Connection.countDocuments({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ],
+            nextFollowUp: { $lte: today }
         });
 
-        // Get user's chapter
-        const user = await User.findById(req.user.id);
+        // Recent contacts (last 7 days)
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
         
-        // Chapter members in local area
-        let chapterMembers = 0;
-        if (user && user.chapter) {
-            const chapter = await Chapter.findById(user.chapter);
-            if (chapter) {
-                chapterMembers = chapter.members.length;
-            }
-        }
+        const recentContacts = await Connection.countDocuments({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ],
+            lastContact: { $gte: sevenDaysAgo }
+        });
+
+        // Key relationships
+        const keyRelationships = await Connection.countDocuments({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ],
+            relationshipStrength: 'key'
+        });
 
         res.json({
-            totalConnections,
-            pendingRequests,
-            chapterMembers
+            totalMembers: totalConnections,
+            followUpsDue,
+            recentContacts,
+            keyRelationships
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+};
+
+// Get all network members with relationship management data
+exports.getAllMembers = async (req, res) => {
+    try {
+        const {
+            search = '',
+            chapter = 'all',
+            industry = 'all',
+            relationship = 'all',
+            page = 1,
+            limit = 20
+        } = req.query;
+
+        // Get all connections
+        const connections = await Connection.find({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ]
+        }).populate({
+            path: 'requester recipient',
+            select: 'name title company industry location chapter expertise bio profilePhoto'
+        }).populate({
+            path: 'requester.chapter recipient.chapter',
+            select: 'name city country'
+        });
+
+        // Format members with relationship data
+        let members = connections.map(connection => {
+            const member = connection.requester._id.toString() === req.user.id ? 
+                connection.recipient : connection.requester;
+            
+            return {
+                id: member._id,
+                connectionId: connection._id,
+                name: member.name,
+                title: member.title || '',
+                company: member.company || '',
+                industry: member.industry || '',
+                location: member.location || '',
+                chapter: member.chapter ? member.chapter.name : '',
+                expertise: member.expertise || [],
+                avatar: member.profilePhoto,
+                lastContact: connection.lastContact,
+                nextFollowUp: connection.nextFollowUp,
+                communicationPreference: connection.communicationPreference || 'email',
+                relationshipStrength: connection.relationshipStrength || 'new',
+                notes: connection.notes || '',
+                tags: connection.tags || [],
+                joinDate: connection.createdAt,
+                availability: member.availability || 'available'
+            };
+        });
+
+        // Apply filters
+        if (search) {
+            const searchLower = search.toLowerCase();
+            members = members.filter(member =>
+                member.name.toLowerCase().includes(searchLower) ||
+                member.company.toLowerCase().includes(searchLower) ||
+                member.industry.toLowerCase().includes(searchLower) ||
+                member.expertise.some(exp => exp.toLowerCase().includes(searchLower))
+            );
+        }
+
+        if (chapter !== 'all') {
+            members = members.filter(member => member.chapter === chapter);
+        }
+
+        if (industry !== 'all') {
+            members = members.filter(member => member.industry === industry);
+        }
+
+        if (relationship !== 'all') {
+            members = members.filter(member => member.relationshipStrength === relationship);
+        }
+
+        // Pagination
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const paginatedMembers = members.slice(skip, skip + parseInt(limit));
+
+        res.json({
+            members: paginatedMembers,
+            pagination: {
+                total: members.length,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                pages: Math.ceil(members.length / parseInt(limit))
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Get members with follow-ups due
+exports.getFollowUpsDue = async (req, res) => {
+    try {
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+
+        const connections = await Connection.find({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ],
+            nextFollowUp: { $lte: today }
+        }).populate({
+            path: 'requester recipient',
+            select: 'name title company profilePhoto'
+        });
+
+        const followUpMembers = connections.map(connection => {
+            const member = connection.requester._id.toString() === req.user.id ? 
+                connection.recipient : connection.requester;
+            
+            return {
+                id: member._id,
+                connectionId: connection._id,
+                name: member.name,
+                title: member.title,
+                company: member.company,
+                avatar: member.profilePhoto,
+                nextFollowUp: connection.nextFollowUp,
+                relationshipStrength: connection.relationshipStrength || 'new',
+                notes: connection.notes
+            };
+        });
+
+        res.json({ members: followUpMembers });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Update relationship data (follow-up, notes, strength, etc.)
+exports.updateRelationship = async (req, res) => {
+    try {
+        const { connectionId } = req.params;
+        const {
+            nextFollowUp,
+            notes,
+            relationshipStrength,
+            communicationPreference,
+            tags
+        } = req.body;
+
+        const connection = await Connection.findById(connectionId);
+        if (!connection) {
+            return res.status(404).json({ error: "Connection not found" });
+        }
+
+        // Verify user owns this connection
+        if (connection.requester.toString() !== req.user.id && 
+            connection.recipient.toString() !== req.user.id) {
+            return res.status(403).json({ error: "Not authorized to update this connection" });
+        }
+
+        // Update fields
+        if (nextFollowUp !== undefined) connection.nextFollowUp = nextFollowUp ? new Date(nextFollowUp) : null;
+        if (notes !== undefined) connection.notes = notes;
+        if (relationshipStrength !== undefined) connection.relationshipStrength = relationshipStrength;
+        if (communicationPreference !== undefined) connection.communicationPreference = communicationPreference;
+        if (tags !== undefined) connection.tags = tags;
+
+        await connection.save();
+
+        res.json({ 
+            message: "Relationship updated successfully",
+            connection: {
+                id: connection._id,
+                nextFollowUp: connection.nextFollowUp,
+                notes: connection.notes,
+                relationshipStrength: connection.relationshipStrength,
+                communicationPreference: connection.communicationPreference,
+                tags: connection.tags
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Log communication with a member
+exports.logCommunication = async (req, res) => {
+    try {
+        const { connectionId } = req.params;
+        const { type, notes, followUpDate } = req.body;
+
+        const connection = await Connection.findById(connectionId);
+        if (!connection) {
+            return res.status(404).json({ error: "Connection not found" });
+        }
+
+        // Verify user owns this connection
+        if (connection.requester.toString() !== req.user.id && 
+            connection.recipient.toString() !== req.user.id) {
+            return res.status(403).json({ error: "Not authorized to update this connection" });
+        }
+
+        // Update last contact and communication log
+        connection.lastContact = new Date();
+        connection.lastCommunicationType = type;
+        
+        if (followUpDate) {
+            connection.nextFollowUp = new Date(followUpDate);
+        }
+
+        // Add to communication history
+        if (!connection.communicationHistory) {
+            connection.communicationHistory = [];
+        }
+        
+        connection.communicationHistory.push({
+            type,
+            date: new Date(),
+            notes: notes || '',
+            loggedBy: req.user.id
+        });
+
+        await connection.save();
+
+        res.json({ 
+            message: "Communication logged successfully",
+            lastContact: connection.lastContact,
+            nextFollowUp: connection.nextFollowUp
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Get recent communications
+exports.getRecentCommunications = async (req, res) => {
+    try {
+        const { limit = 10 } = req.query;
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+        const connections = await Connection.find({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ],
+            lastContact: { $gte: sevenDaysAgo }
+        }).populate({
+            path: 'requester recipient',
+            select: 'name title company profilePhoto'
+        }).sort({ lastContact: -1 }).limit(parseInt(limit));
+
+        const recentContacts = connections.map(connection => {
+            const member = connection.requester._id.toString() === req.user.id ? 
+                connection.recipient : connection.requester;
+            
+            return {
+                id: member._id,
+                connectionId: connection._id,
+                name: member.name,
+                title: member.title,
+                company: member.company,
+                avatar: member.profilePhoto,
+                lastContact: connection.lastContact,
+                lastCommunicationType: connection.lastCommunicationType,
+                relationshipStrength: connection.relationshipStrength
+            };
+        });
+
+        res.json({ members: recentContacts });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Get key relationships
+exports.getKeyRelationships = async (req, res) => {
+    try {
+        const connections = await Connection.find({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ],
+            relationshipStrength: 'key'
+        }).populate({
+            path: 'requester recipient',
+            select: 'name title company industry profilePhoto expertise'
+        });
+
+        const keyMembers = connections.map(connection => {
+            const member = connection.requester._id.toString() === req.user.id ? 
+                connection.recipient : connection.requester;
+            
+            return {
+                id: member._id,
+                connectionId: connection._id,
+                name: member.name,
+                title: member.title,
+                company: member.company,
+                industry: member.industry,
+                expertise: member.expertise || [],
+                avatar: member.profilePhoto,
+                lastContact: connection.lastContact,
+                nextFollowUp: connection.nextFollowUp,
+                notes: connection.notes,
+                tags: connection.tags || []
+            };
+        });
+
+        res.json({ members: keyMembers });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Get available chapters for filter
+exports.getChapters = async (req, res) => {
+    try {
+        const chapters = await Chapter.find({ status: 'Active' })
+            .select('name city country')
+            .sort({ name: 1 });
+
+        res.json({ chapters });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Get available industries for filter
+exports.getIndustries = async (req, res) => {
+    try {
+        // Get unique industries from connected users
+        const connections = await Connection.find({
+            $or: [
+                { requester: req.user.id, status: 'accepted' },
+                { recipient: req.user.id, status: 'accepted' }
+            ]
+        }).populate({
+            path: 'requester recipient',
+            select: 'industry'
+        });
+
+        const industries = [...new Set(
+            connections.map(conn => {
+                const member = conn.requester._id.toString() === req.user.id ? 
+                    conn.recipient : conn.requester;
+                return member.industry;
+            }).filter(industry => industry && industry.trim() !== '')
+        )].sort();
+
+        res.json({ industries });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Schedule follow-up for a member
+exports.scheduleFollowUp = async (req, res) => {
+    try {
+        const { connectionId } = req.params;
+        const { followUpDate, notes } = req.body;
+
+        if (!followUpDate) {
+            return res.status(400).json({ error: "Follow-up date is required" });
+        }
+
+        const connection = await Connection.findById(connectionId);
+        if (!connection) {
+            return res.status(404).json({ error: "Connection not found" });
+        }
+
+        // Verify user owns this connection
+        if (connection.requester.toString() !== req.user.id && 
+            connection.recipient.toString() !== req.user.id) {
+            return res.status(403).json({ error: "Not authorized to update this connection" });
+        }
+
+        connection.nextFollowUp = new Date(followUpDate);
+        if (notes) {
+            connection.notes = notes;
+        }
+
+        await connection.save();
+
+        res.json({ 
+            message: "Follow-up scheduled successfully",
+            nextFollowUp: connection.nextFollowUp
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Add note to a member relationship
+exports.addNote = async (req, res) => {
+    try {
+        const { connectionId } = req.params;
+        const { note } = req.body;
+
+        if (!note || note.trim() === '') {
+            return res.status(400).json({ error: "Note content is required" });
+        }
+
+        const connection = await Connection.findById(connectionId);
+        if (!connection) {
+            return res.status(404).json({ error: "Connection not found" });
+        }
+
+        // Verify user owns this connection
+        if (connection.requester.toString() !== req.user.id && 
+            connection.recipient.toString() !== req.user.id) {
+            return res.status(403).json({ error: "Not authorized to update this connection" });
+        }
+
+        // Add note to existing notes or create new
+        const timestamp = new Date().toISOString().split('T')[0];
+        const noteEntry = `[${timestamp}] ${note.trim()}`;
+        
+        connection.notes = connection.notes ? 
+            `${connection.notes}\n\n${noteEntry}` : 
+            noteEntry;
+
+        await connection.save();
+
+        res.json({ 
+            message: "Note added successfully",
+            notes: connection.notes
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Keep existing functions for backward compatibility
+exports.getMyConnections = async (req, res) => {
+    // Redirect to getAllMembers for consistency
+    req.query.limit = req.query.limit || 50;
+    return exports.getAllMembers(req, res);
 };
 
 // Get my connections
@@ -71,7 +525,9 @@ exports.getMyConnections = async (req, res) => {
             };
         });
 
-        res.json(formattedConnections);
+        res.json({
+            connections: formattedConnections
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -111,7 +567,7 @@ exports.getChapterMembers = async (req, res) => {
     try {
         const user = await User.findById(req.user.id);
         if (!user || !user.chapter) {
-            return res.status(404).json({ error: "No chapter associated with user" });
+            return res.json({ members: [] });
         }
 
         const chapter = await Chapter.findById(user.chapter).populate({
@@ -120,10 +576,10 @@ exports.getChapterMembers = async (req, res) => {
         });
 
         if (!chapter) {
-            return res.status(404).json({ error: "Chapter not found" });
+            return res.json({ members: [] });
         }
 
-        const members = chapter.members.filter(member => 
+        const members = chapter.members.filter(member =>
             member._id.toString() !== req.user.id
         ).map(member => ({
             id: member._id,
@@ -135,8 +591,6 @@ exports.getChapterMembers = async (req, res) => {
         }));
 
         res.json({
-            chapterName: chapter.name,
-            location: chapter.location,
             members
         });
     } catch (err) {

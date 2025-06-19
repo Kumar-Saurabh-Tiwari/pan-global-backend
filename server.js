@@ -7,7 +7,11 @@ require('dotenv').config();
 const app = express();
 connectDB();
 
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // Auth routes - public
@@ -23,6 +27,7 @@ app.use('/api', authMiddleware.verifyToken, require('./app/routes/contact.route'
 app.use('/api', authMiddleware.verifyToken, require('./app/routes/network.route'));
 app.use('/api', authMiddleware.verifyToken, require('./app/routes/forum.route'));
 app.use('/api', authMiddleware.verifyToken, require('./app/routes/globalAccess.route'));
+app.use('/api', authMiddleware.verifyToken, require('./app/routes/memberBenefits.route'));
 app.use('/api/settings', authMiddleware.verifyToken, require('./app/routes/settings.route'));
 
 

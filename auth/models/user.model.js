@@ -36,7 +36,15 @@ const UserSchema = new mongoose.Schema({
         showEmail: { type: Boolean, default: false },
         showPhone: { type: Boolean, default: false },
         allowMessaging: { type: Boolean, default: true }
-    }
+    },
+    twoFactorEnabled: {
+        type: Boolean,
+        default: false
+    },
+    passwordChangedAt: {
+        type: Date,
+        default: Date.now
+    },
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', UserSchema);

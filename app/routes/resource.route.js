@@ -22,7 +22,7 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({ 
+const upload = multer({
     storage,
     limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
     fileFilter: (req, file, cb) => {
@@ -47,12 +47,26 @@ router.get('/resources', resourcesController.getAllResources);
 router.get('/resources/:id', resourcesController.getResourceDetails);
 router.post('/resources/:id/access', authMiddleware.verifyToken, resourcesController.accessResource);
 
+
+// Comment routes (require authentication)
+router.get('/resources/:id/comments', resourcesController.getComments);
+router.get('/resources/:id/commenters', resourcesController.getCommenters);
+
+router.post('/resources/:id/comments', resourcesController.addComment);
+router.post('/resources/:resourceId/comments/:commentId/like', resourcesController.likeComment);
+router.delete('/resources/:resourceId/comments/:commentId', resourcesController.deleteComment);
+
 // Admin routes
-router.post('/resources', 
-    authMiddleware.verifyToken, 
+router.post('/resources',
+    authMiddleware.verifyToken,
     // authMiddleware.isAdmin,
     upload.single('image'),
     resourcesController.addResource
 );
+router.put('/resources/:id', authMiddleware.verifyToken, upload.single('image'), resourcesController.updateResource);
+
+router.get('/resources/:id', resourcesController.getResourceById);
+router.post('/resources/:id/view', resourcesController.trackResourceView);
+router.post('/resources/:id/like', authMiddleware.verifyToken, resourcesController.toggleResourceLike);
 
 module.exports = router;

@@ -16,7 +16,7 @@ exports.login = async (req, res) => {
             return res.status(400).json({ error: "Invalid credentials" });
         }
 
-        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '30d' });
         res.json({ token, user: { id: user._id, email: user.email } });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -152,6 +152,102 @@ exports.register = async (req, res) => {
                 name: newUser.name,
                 email: newUser.email
             }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Change password (authenticated user)
+exports.changePassword = async (req, res) => {
+    console.log(req.user)
+    try {
+        const { currentPassword, newPassword, confirmNewPassword } = req.body;
+        
+        // Validation
+        if (!currentPassword || !newPassword || !confirmNewPassword) {
+            return res.status(400).json({ 
+                error: "Current password, new password, and confirmation are required" 
+            });
+        }
+        
+        if (newPassword !== confirmNewPassword) {
+            return res.status(400).json({ 
+                error: "New password and confirmation do not match" 
+            });
+        }
+        
+        if (newPassword.length < 6) {
+            return res.status(400).json({ 
+                error: "New password must be at least 6 characters long" 
+            });
+        }
+        
+        // Find the user
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+        
+        // Verify current password
+        const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+        if (!isCurrentPasswordValid) {
+            return res.status(400).json({ error: "Current password is incorrect" });
+        }
+        
+        // Hash new password
+        const salt = await bcrypt.genSalt(10);
+        const hashedNewPassword = await bcrypt.hash(newPassword, salt);
+        
+        // Update password
+        user.password = hashedNewPassword;
+        user.passwordChangedAt = new Date();
+        await user.save();
+        
+        res.json({ 
+            message: "Password changed successfully",
+            passwordChangedAt: user.passwordChangedAt
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Get security settings
+exports.getSecuritySettings = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('twoFactorEnabled passwordChangedAt');
+        
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+        
+        res.json({
+            twoFactorEnabled: user.twoFactorEnabled || false,
+            passwordChangedAt: user.passwordChangedAt,
+            lastLogin: user.lastLogin
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Enable/Disable Two-Factor Authentication
+exports.toggleTwoFactor = async (req, res) => {
+    try {
+        const { enable } = req.body;
+        
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+        
+        user.twoFactorEnabled = enable;
+        await user.save();
+        
+        res.json({ 
+            message: `Two-factor authentication ${enable ? 'enabled' : 'disabled'} successfully`,
+            twoFactorEnabled: user.twoFactorEnabled
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
