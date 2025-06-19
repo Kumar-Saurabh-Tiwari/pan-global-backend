@@ -214,7 +214,7 @@ exports.getAllDashboardData = async (req, res) => {
         }).sort({ date: 1 }).limit(3);
         
         const upcomingEvents = {
-            total: events.length || 3,
+            total: events.length || 0,
             description: "Events in next 30 days",
             growth: "+20%",
             events: events.map(event => ({
@@ -236,7 +236,7 @@ exports.getAllDashboardData = async (req, res) => {
         // Get chapters
         const chapters = await Chapter.find();
         const globalChapters = {
-            total: chapters.length || 8,
+            total: chapters.length || 0,
             description: "Access to locations"
         };
         
